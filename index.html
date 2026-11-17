@@ -366,17 +366,20 @@ function queueCloudSave() {
     }
   }, 1000);
 }
-
 cloudButton.onclick = async () => {
   try {
-    await auth.signInWithPopup(
-      new firebase.auth.GoogleAuthProvider()
-    );
+    if (auth.currentUser) {
+      await auth.signOut();
+      cloudButton.textContent = 'Sign in with Google';
+    } else {
+      await auth.signInWithPopup(
+        new firebase.auth.GoogleAuthProvider()
+      );
+    }
   } catch (e) {
-    alert('Google sign-in failed: ' + e.message);
+    alert('Authentication error: ' + e.message);
   }
 };
-
 auth.onAuthStateChanged(async user => {
   if (!user) {
     cloudButton.textContent = 'Sign in with Google';
