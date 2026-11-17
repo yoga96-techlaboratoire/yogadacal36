@@ -40,6 +40,11 @@ tr.now td{background:rgba(240,178,74,.1)}tr.off{opacity:.45}
 
 #nav, main { visibility:hidden }
 body.public-mode #nav, body.public-mode main { display:none !important }
+body.viewer-mode #publicView{display:none !important}
+body.viewer-mode #nav, body.viewer-mode main{visibility:visible}
+body.viewer-mode main button, body.viewer-mode main input, body.viewer-mode main select, body.viewer-mode main textarea{pointer-events:none !important;opacity:.48;cursor:not-allowed}
+body.viewer-mode main button{filter:grayscale(.35)}
+body.viewer-mode #modal{display:none !important}
 #publicView{display:none;max-width:900px;margin:24px auto;padding:18px}
 body.public-mode #publicView{display:block}
 body.member-mode #nav, body.member-mode main{visibility:visible}
@@ -108,6 +113,7 @@ let S;try{S=JSON.parse(localStorage.getItem('dayflow')||'null')}catch(e){S=null}
 if(!S||!Array.isArray(S.sched))S={sched:mkSched(),logs:{},day:{},cfg:{alarm:true,snd:'clock',vol:.9,theme:'dark'},run:null,rung:{}};
 S.cfg=S.cfg||{};S.logs=S.logs||{};S.day=S.day||{};S.rung=S.rung||{};
 const save=()=>{
+  if (document.body.classList.contains('viewer-mode')) return;
   try {
     localStorage.setItem('dayflow',JSON.stringify(S));
     queueCloudSave();
@@ -345,7 +351,7 @@ loadCus();go('today');setInterval(()=>{tick();if(tab==='today'&&S.run&&new Date(
 <script>
 
 const cloudButton = document.createElement('button');
-cloudButton.textContent = 'Sign in with Google';
+cloudButton.textContent = 'Sign in with Google to view timetable';
 cloudButton.style.margin = '8px';
 document.querySelector('header').appendChild(cloudButton);
 
@@ -409,12 +415,11 @@ function queueCloudSave() {
         updatedBy: user.uid,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-      // Public projection contains timetable fields only, never private records.
-      const publicSchedule = (S.sched || []).filter(a => a && a.on !== false)
-        .map(a => ({name:String(a.name || '').slice(0,120),start:String(a.s || ''),
-                    end:String(a.e || ''),category:String(a.cat || '').slice(0,40)}));
+      // Publish the complete dashboard snapshot for authenticated read-only viewers.
+      // Firestore rules allow public viewers to GET this published document, but only
+      // active Admin/Editor members can create or update it.
       await db.collection('publicWorkspaces').doc('dayflow-main').set({
-        published:true,workspaceName:'Dayflow Pro',schedule:publicSchedule,
+        published:true,workspaceName:'Dayflow Pro',dashboardData:S,
         updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:user.uid
       });
       await recordDayflowActivity('schedule_saved');
@@ -430,7 +435,12 @@ function queueCloudSave() {
 cloudButton.onclick = async () => {
   try {
     if (auth.currentUser) {
-      await recordDayflowActivity('sign_out');
+      const currentMember = await workspaceRef.collection('members').doc(auth.currentUser.uid).get().catch(() => null);
+      if (currentMember && currentMember.exists &&
+          currentMember.data().active === true &&
+          ['admin', 'editor'].includes(currentMember.data().role)) {
+        await recordDayflowActivity('sign_out');
+      }
       await auth.signOut();
     } else {
       await auth.signInWithPopup(
@@ -450,88 +460,70 @@ auth.onAuthStateChanged(async user => {
 
   clearTimeout(cloudTimer);
   cloudStarted = false;
+  cloudApplying = false;
 
-  if (!user) {
-    activityReportButton.style.display = 'none';
-    cloudButton.style.display = '';
-    cloudButton.textContent = 'Admin / Editor sign in';
-    document.body.classList.add('public-mode');
-    document.body.classList.remove('member-mode');
-    db.collection('publicWorkspaces').doc('dayflow-main').onSnapshot(snapshot => {
-      const status=document.getElementById('pubStatus'), table=document.getElementById('pubTable');
-      if (!snapshot.exists || snapshot.data().published !== true) {
-        status.textContent='The public timetable has not been published yet.'; table.innerHTML=''; return;
-      }
-      const data=snapshot.data();
-      document.getElementById('pubTitle').textContent=(data.workspaceName||'Dayflow Pro')+' — Public Schedule';
-      status.textContent='Read-only public timetable · Last updated: '+(data.updatedAt&&data.updatedAt.toDate?data.updatedAt.toDate().toLocaleString():'recently');
-      const rows=Array.isArray(data.schedule)?data.schedule:[];
-      table.innerHTML='<tr><th>Activity</th><th>Start</th><th>End</th><th>Category</th></tr>'+
-        rows.map(a=>'<tr><td>'+esc(a.name)+'</td><td>'+esc(a.start)+'</td><td>'+esc(a.end)+'</td><td>'+esc(a.category)+'</td></tr>').join('');
-    },error=>{document.getElementById('pubStatus').textContent='Public timetable is not published yet, or access is unavailable.';console.error(error)});
-    return;
-  }
-  // Keep the public read-only page visible until membership is verified.
-  // Never reveal the private dashboard to a non-member, even briefly.
-  cloudButton.style.display = '';
+  // Default state is always the public, read-only timetable.
   document.body.classList.add('public-mode');
   document.body.classList.remove('member-mode');
+  activityReportButton.style.display = 'none';
 
-  cloudButton.textContent = 'Checking membership...';
+  if (!user) {
+    cloudButton.style.display = '';
+    cloudButton.textContent = 'Sign in with Google to view timetable';
+    loadPublicTimetable();
+    return;
+  }
+
+  cloudButton.style.display = '';
+  cloudButton.textContent = 'Checking account access...';
 
   try {
-    // Check the signed-in user's membership.
-    const memberSnap = await workspaceRef
-      .collection('members').doc(user.uid).get();
+    // Only active Admin and Editor members may enter the private dashboard.
+    const memberSnap = await workspaceRef.collection('members').doc(user.uid).get();
+    const member = memberSnap.exists ? memberSnap.data() : null;
+    const isActive = !!(member && member.active === true);
+    const isDashboardMember = isActive && ['admin', 'editor'].includes(member.role);
 
-    if (!memberSnap.exists ||
-        memberSnap.data().active !== true) {
-      await auth.signOut();
-      alert('This Google account is not an active workspace member.');
+    if (!isDashboardMember) {
+      // Signed-in non-members can view the complete published dashboard, read-only.
+      // They never read the private workspace document or gain write permissions.
+      document.body.classList.remove('public-mode','member-mode');
+      document.body.classList.add('viewer-mode');
+      activityReportButton.style.display = 'none';
+      cloudButton.textContent = 'Sign out · Public viewer';
+      await recordDayflowActivity('public_view');
+      loadPublicDashboard();
       return;
     }
 
-    const member = memberSnap.data();
-
-    if (!['admin', 'editor', 'viewer'].includes(member.role)) {
-      await auth.signOut();
-      alert('Invalid workspace role.');
-      return;
-    }
-
-    // Only verified workspace members can enter the private dashboard.
+    // Only now reveal the private dashboard.
     document.body.classList.remove('public-mode');
     document.body.classList.add('member-mode');
-
-    if (member.role === 'admin' || member.role === 'editor') {
-      activityReportButton.style.display = '';
-    } else {
-      activityReportButton.style.display = 'none';
-    }
-
+    activityReportButton.style.display = '';
     await recordDayflowActivity('sign_in');
     await recordDayflowActivity('page_view');
 
     cloudButton.textContent = 'Connecting to shared workspace...';
 
-    // Load the existing shared document.
     let sharedSnap = await sharedRef.get();
 
     if (!sharedSnap.exists) {
       // Only the workspace owner may initialize shared data.
       const workspaceSnap = await workspaceRef.get();
 
-      if (!workspaceSnap.exists ||
-          workspaceSnap.data().ownerUid !== user.uid) {
+      if (!workspaceSnap.exists || workspaceSnap.data().ownerUid !== user.uid) {
         alert('The owner must initialize the shared schedule first.');
-        await auth.signOut();
+        document.body.classList.remove('public-mode','member-mode');
+        document.body.classList.add('viewer-mode');
+        activityReportButton.style.display = 'none';
+        cloudButton.textContent = 'Sign out · Public viewer';
+        loadPublicDashboard();
         return;
       }
 
       // Preserve the existing personal cloud data during migration.
       const personalRef = db.collection('users').doc(user.uid)
         .collection('dayflow').doc('main');
-
       const personalSnap = await personalRef.get();
 
       if (personalSnap.exists && personalSnap.data().data) {
@@ -551,7 +543,6 @@ auth.onAuthStateChanged(async user => {
         updatedBy: user.uid,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-
       sharedSnap = await sharedRef.get();
     }
 
@@ -559,7 +550,6 @@ auth.onAuthStateChanged(async user => {
       throw new Error('Shared schedule document has no data.');
     }
 
-    // Always load the shared schedule on this device.
     cloudApplying = true;
     S = sharedSnap.data().data;
     localStorage.setItem('dayflow', JSON.stringify(S));
@@ -567,25 +557,17 @@ auth.onAuthStateChanged(async user => {
     cloudApplying = false;
 
     cloudStarted = true;
-    document.body.classList.remove('public-mode');
-    document.body.classList.add('member-mode');
-    cloudButton.textContent =
-      '☁ ' + member.role.toUpperCase() + ' · Shared workspace';
+    cloudButton.textContent = '☁ ' + member.role.toUpperCase() + ' · Shared workspace';
 
-    // Listen for changes made by other members.
     cloudUnsubscribe = sharedRef.onSnapshot(snapshot => {
       if (!snapshot.exists || !snapshot.data().data) return;
-
       const remote = snapshot.data().data;
-
       if (JSON.stringify(remote) === JSON.stringify(S)) return;
-
       cloudApplying = true;
       S = remote;
       localStorage.setItem('dayflow', JSON.stringify(S));
       render();
       cloudApplying = false;
-
       cloudButton.textContent = '☁ Shared changes received';
     });
 
@@ -593,8 +575,75 @@ auth.onAuthStateChanged(async user => {
     cloudApplying = false;
     cloudStarted = false;
     console.error(e);
-    cloudButton.textContent = 'Sync error';
-    alert('Workspace connection failed: ' + e.message);
+    // Do not reveal the dashboard if membership verification or loading fails.
+    document.body.classList.remove('member-mode');
+    document.body.classList.add('public-mode');
+    activityReportButton.style.display = 'none';
+    cloudButton.textContent = 'Sign out · Access limited';
+    loadPublicTimetable();
+    alert('Could not verify dashboard access. ' + e.message);
   }
 });
+
+function loadPublicDashboard() {
+  const status = document.getElementById('pubStatus');
+  if (window.dayflowPublicUnsubscribe) window.dayflowPublicUnsubscribe();
+  window.dayflowPublicUnsubscribe = db.collection('publicWorkspaces').doc('dayflow-main')
+    .onSnapshot(snapshot => {
+      if (!snapshot.exists || snapshot.data().published !== true || !snapshot.data().dashboardData) {
+        status.textContent = 'The full dashboard has not been published yet. Ask the Admin or Editor to open the dashboard and save once.';
+        return;
+      }
+      const data = snapshot.data();
+      const remote = data.dashboardData;
+      if (!Array.isArray(remote.sched) || typeof remote.logs !== 'object') {
+        status.textContent = 'The published dashboard data is incomplete.';
+        return;
+      }
+      cloudApplying = true;
+      S = remote;
+      localStorage.setItem('dayflow', JSON.stringify(S));
+      document.documentElement.dataset.theme = S.cfg && S.cfg.theme || 'dark';
+      cloudApplying = false;
+      status.textContent = 'Full dashboard · Read-only viewer · Last updated: ' +
+        (data.updatedAt && data.updatedAt.toDate ? data.updatedAt.toDate().toLocaleString() : 'recently');
+      render();
+      document.body.classList.add('viewer-mode');
+      document.body.classList.remove('public-mode','member-mode');
+    }, error => {
+      status.textContent = 'The published dashboard is unavailable: ' + error.message;
+      console.error(error);
+    });
+}
+
+function loadPublicTimetable() {
+  const status = document.getElementById('pubStatus');
+  const table = document.getElementById('pubTable');
+  if (window.dayflowPublicUnsubscribe) window.dayflowPublicUnsubscribe();
+  window.dayflowPublicUnsubscribe = db.collection('publicWorkspaces').doc('dayflow-main')
+    .onSnapshot(snapshot => {
+      if (!snapshot.exists || snapshot.data().published !== true) {
+        status.textContent = 'The public timetable has not been published yet.';
+        table.innerHTML = '';
+        return;
+      }
+      const data = snapshot.data();
+      document.getElementById('pubTitle').textContent =
+        (data.workspaceName || 'Dayflow Pro') + ' — Public Schedule';
+      status.textContent = 'Read-only public timetable · Last updated: ' +
+        (data.updatedAt && data.updatedAt.toDate ? data.updatedAt.toDate().toLocaleString() : 'recently');
+      const rows = Array.isArray(data.schedule) ? data.schedule : [];
+      table.innerHTML = '<tr><th>Activity</th><th>Start</th><th>End</th><th>Category</th></tr>' +
+        rows.map(a => '<tr><td>' + esc(a.name) + '</td><td>' + esc(a.start) +
+          '</td><td>' + esc(a.end) + '</td><td>' + esc(a.category) + '</td></tr>').join('');
+    }, error => {
+      status.textContent = 'Public timetable is unavailable right now.';
+      console.error(error);
+    });
+}
+document.querySelector('main').addEventListener('click', event => {
+  if (document.body.classList.contains('viewer-mode') && event.target.closest('button, input, select, textarea, label')) {
+    event.preventDefault(); event.stopImmediatePropagation();
+  }
+}, true);
 </script></body></html>
