@@ -332,7 +332,6 @@ showQ(qi);
 loadCus();go('today');setInterval(()=>{tick();if(tab==='today'&&S.run&&new Date().getSeconds()===0)renderToday()},1000);
   
 </script>
-
 <script>
 const cloudButton = document.createElement('button');
 cloudButton.textContent = 'Sign in with Google';
@@ -352,13 +351,18 @@ function queueCloudSave() {
   if (!auth.currentUser || cloudApplying) return;
 
   clearTimeout(cloudTimer);
+
   cloudTimer = setTimeout(async () => {
     try {
-      await cloudDoc(auth.currentUser.uid).set({
+      const user = auth.currentUser;
+      if (!user) return;
+
+      await cloudDoc(user.uid).set({
         data: S,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-      cloudButton.textContent = '☁ Synced';
+
+      cloudButton.textContent = 'Sign out';
     } catch (e) {
       cloudButton.textContent = 'Sync failed';
       console.error(e);
@@ -366,11 +370,11 @@ function queueCloudSave() {
     }
   }, 1000);
 }
+
 cloudButton.onclick = async () => {
   try {
     if (auth.currentUser) {
       await auth.signOut();
-      cloudButton.textContent = 'Sign in with Google';
     } else {
       await auth.signInWithPopup(
         new firebase.auth.GoogleAuthProvider()
@@ -380,11 +384,22 @@ cloudButton.onclick = async () => {
     alert('Authentication error: ' + e.message);
   }
 };
+
 auth.onAuthStateChanged(async user => {
+
   if (!user) {
+    if (cloudUnsubscribe) {
+      cloudUnsubscribe();
+      cloudUnsubscribe = null;
+    }
+
+    clearTimeout(cloudTimer);
+    cloudStarted = false;
     cloudButton.textContent = 'Sign in with Google';
     return;
   }
+
+  cloudButton.textContent = 'Sign out';
 
   if (cloudStarted) return;
   cloudStarted = true;
@@ -422,21 +437,27 @@ auth.onAuthStateChanged(async user => {
       if (!snapshot.exists || !snapshot.data().data) return;
 
       const remote = snapshot.data().data;
+
       if (JSON.stringify(remote) === JSON.stringify(S)) return;
 
       cloudApplying = true;
+
       S = remote;
       localStorage.setItem('dayflow', JSON.stringify(S));
+
       cloudApplying = false;
       render();
-      cloudButton.textContent = '☁ Synced';
+
+      cloudButton.textContent = 'Sign out';
     });
 
-    cloudButton.textContent = '☁ Synced';
+    cloudButton.textContent = 'Sign out';
+
   } catch (e) {
     cloudApplying = false;
     cloudStarted = false;
     cloudButton.textContent = 'Sync error';
+    console.error(e);
     alert('Firebase error: ' + e.message);
   }
 });
