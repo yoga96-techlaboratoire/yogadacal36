@@ -37,7 +37,16 @@ tr.now td{background:rgba(240,178,74,.1)}tr.off{opacity:.45}
 .wtbl{min-width:680px}.wtbl th,.wtbl td{text-align:center;padding:6px 4px}.wtbl th.l{text-align:left;min-width:230px;position:sticky;left:0;background:var(--p)}
 .wtbl tr.sec th{text-align:left;border-left:6px solid var(--c);background:var(--p2);font:600 15px Georgia,serif}.wtbl .today{background:rgba(240,178,74,.12)}
 .wrow.done input{text-decoration:line-through;color:var(--mut)}
+
+#nav, main { visibility:hidden }
+body.public-mode #nav, body.public-mode main { display:none !important }
+#publicView{display:none;max-width:900px;margin:24px auto;padding:18px}
+body.public-mode #publicView{display:block}
+body.member-mode #nav, body.member-mode main{visibility:visible}
+#publicView .card{background:var(--p);border:1px solid var(--ln);border-radius:12px;padding:16px;margin:12px 0}
 </style></head><body>
+<div id="publicView"><div class="card"><h2 id="pubTitle">Dayflow Pro — Public Schedule</h2><p class="mut" id="pubStatus">Loading published timetable…</p><div class="wrap"><table id="pubTable"></table></div></div></div>
+
 <div id="ring"><span id="ringT"></span><button onclick="snooze()">Snooze 5 min</button><button onclick="stopRing()">Stop</button></div>
 <header><b>Dayflow Pro</b>
 <nav id="nav"></nav><span style="flex:1"></span><button onclick="toggleTheme()">Light / dark</button></header>
@@ -363,7 +372,14 @@ function queueCloudSave() {
         updatedBy: user.uid,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-
+      // Public projection contains timetable fields only, never private records.
+      const publicSchedule = (S.sched || []).filter(a => a && a.on !== false)
+        .map(a => ({name:String(a.name || '').slice(0,120),start:String(a.s || ''),
+                    end:String(a.e || ''),category:String(a.cat || '').slice(0,40)}));
+      await db.collection('publicWorkspaces').doc('dayflow-main').set({
+        published:true,workspaceName:'Dayflow Pro',schedule:publicSchedule,
+        updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:user.uid
+      });
       cloudButton.textContent = '☁ Shared workspace synced';
     } catch (e) {
       console.error(e);
@@ -397,9 +413,26 @@ auth.onAuthStateChanged(async user => {
   cloudStarted = false;
 
   if (!user) {
-    cloudButton.textContent = 'Sign in with Google';
+    cloudButton.style.display = 'none';
+    document.body.classList.add('public-mode');
+    document.body.classList.remove('member-mode');
+    db.collection('publicWorkspaces').doc('dayflow-main').onSnapshot(snapshot => {
+      const status=document.getElementById('pubStatus'), table=document.getElementById('pubTable');
+      if (!snapshot.exists || snapshot.data().published !== true) {
+        status.textContent='The public timetable has not been published yet.'; table.innerHTML=''; return;
+      }
+      const data=snapshot.data();
+      document.getElementById('pubTitle').textContent=(data.workspaceName||'Dayflow Pro')+' — Public Schedule';
+      status.textContent='Read-only public timetable · Last updated: '+(data.updatedAt&&data.updatedAt.toDate?data.updatedAt.toDate().toLocaleString():'recently');
+      const rows=Array.isArray(data.schedule)?data.schedule:[];
+      table.innerHTML='<tr><th>Activity</th><th>Start</th><th>End</th><th>Category</th></tr>'+
+        rows.map(a=>'<tr><td>'+esc(a.name)+'</td><td>'+esc(a.start)+'</td><td>'+esc(a.end)+'</td><td>'+esc(a.category)+'</td></tr>').join('');
+    },error=>{document.getElementById('pubStatus').textContent='Unable to load the public timetable.';console.error(error)});
     return;
   }
+  cloudButton.style.display = '';
+  document.body.classList.remove('public-mode');
+  document.body.classList.add('member-mode');
 
   cloudButton.textContent = 'Checking membership...';
 
@@ -478,6 +511,8 @@ auth.onAuthStateChanged(async user => {
     cloudApplying = false;
 
     cloudStarted = true;
+    document.body.classList.remove('public-mode');
+    document.body.classList.add('member-mode');
     cloudButton.textContent =
       '☁ ' + member.role.toUpperCase() + ' · Shared workspace';
 
