@@ -81,6 +81,7 @@ body.member-mode #nav, body.member-mode main{visibility:visible}
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-functions-compat.js"></script>
 <script>
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
@@ -348,6 +349,60 @@ cloudButton.textContent = 'Sign in with Google';
 cloudButton.style.margin = '8px';
 document.querySelector('header').appendChild(cloudButton);
 
+// Admin-only activity report download button.
+const activityReportButton = document.createElement('button');
+activityReportButton.textContent = 'Download activity CSV';
+activityReportButton.style.margin = '8px';
+activityReportButton.style.display = 'none';
+document.querySelector('header').appendChild(activityReportButton);
+
+const auditFunctions = firebase.app().functions('us-central1');
+
+async function recordDayflowActivity(action) {
+  const current = auth.currentUser;
+  if (!current) return;
+  try {
+    await auditFunctions.httpsCallable('recordDayflowActivity')({
+      workspaceId: 'dayflow-main',
+      action
+    });
+  } catch (error) {
+    console.error('Activity logging failed:', error);
+  }
+}
+
+activityReportButton.onclick = async () => {
+  activityReportButton.disabled = true;
+  activityReportButton.textContent = 'Preparing CSV...';
+  try {
+    const result = await auditFunctions.httpsCallable('getDayflowActivityReport')({
+      workspaceId: 'dayflow-main',
+      limit: 1000
+    });
+    const rows = result.data.events || [];
+    const columns = ['timestamp', 'email', 'displayName', 'role', 'action'];
+    const quote = value => '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"';
+    const csv = [columns.join(','), ...rows.map(row => columns.map(key => quote(row[key])).join(','))].join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'dayflow-activity-report-' + new Date().toISOString().slice(0,10) + '.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    activityReportButton.textContent = 'Download activity CSV';
+  } catch (error) {
+    console.error(error);
+    alert('Could not download activity report: ' + (error.message || error));
+    activityReportButton.textContent = 'Download activity CSV';
+  } finally {
+    activityReportButton.disabled = false;
+  }
+};
+
+
 const workspaceId = 'dayflow-main';
 const workspaceRef = db.collection('workspaces').doc(workspaceId);
 const sharedRef = workspaceRef.collection('schedule').doc('main');
@@ -380,6 +435,7 @@ function queueCloudSave() {
         published:true,workspaceName:'Dayflow Pro',schedule:publicSchedule,
         updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:user.uid
       });
+      await recordDayflowActivity('schedule_saved');
       cloudButton.textContent = '☁ Shared workspace synced';
     } catch (e) {
       console.error(e);
@@ -392,6 +448,7 @@ function queueCloudSave() {
 cloudButton.onclick = async () => {
   try {
     if (auth.currentUser) {
+      await recordDayflowActivity('sign_out');
       await auth.signOut();
     } else {
       await auth.signInWithPopup(
@@ -413,6 +470,7 @@ auth.onAuthStateChanged(async user => {
   cloudStarted = false;
 
   if (!user) {
+    activityReportButton.style.display = 'none';
     cloudButton.style.display = '';
     cloudButton.textContent = 'Admin / Editor sign in';
     document.body.classList.add('public-mode');
@@ -431,9 +489,11 @@ auth.onAuthStateChanged(async user => {
     },error=>{document.getElementById('pubStatus').textContent='Public timetable is not published yet, or access is unavailable.';console.error(error)});
     return;
   }
+  // Keep the public read-only page visible until membership is verified.
+  // Never reveal the private dashboard to a non-member, even briefly.
   cloudButton.style.display = '';
-  document.body.classList.remove('public-mode');
-  document.body.classList.add('member-mode');
+  document.body.classList.add('public-mode');
+  document.body.classList.remove('member-mode');
 
   cloudButton.textContent = 'Checking membership...';
 
@@ -456,6 +516,19 @@ auth.onAuthStateChanged(async user => {
       alert('Invalid workspace role.');
       return;
     }
+
+    // Only verified workspace members can enter the private dashboard.
+    document.body.classList.remove('public-mode');
+    document.body.classList.add('member-mode');
+
+    if (member.role === 'admin') {
+      activityReportButton.style.display = '';
+    } else {
+      activityReportButton.style.display = 'none';
+    }
+
+    await recordDayflowActivity('sign_in');
+    await recordDayflowActivity('page_view');
 
     cloudButton.textContent = 'Connecting to shared workspace...';
 
