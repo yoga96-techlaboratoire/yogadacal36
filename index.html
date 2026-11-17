@@ -69,7 +69,26 @@ tr.now td{background:rgba(240,178,74,.1)}tr.off{opacity:.45}
  <p class="mut">The weekly tracker exports PDF, Word and Excel from its own tab. Full daily logs export here as JSON, CSV and Markdown.</p>
  <button class="bad" onclick="clearAll()">Clear all data</button></div></section>
 </main><div id="modal"><div id="mb"></div></div>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBaNgr15v9ZpiItzPyQJaWIYveZLXDp_M",
+  authDomain: "daycalender-b30b1.firebaseapp.com",
+  projectId: "daycalender-b30b1",
+  storageBucket: "daycalender-b30b1.firebasestorage.app",
+  messagingSenderId: "109794850434",
+  appId: "1:109794850434:web:7e951aad869789b44ea69b",
+  measurementId: "G-GTH0EHVGHR"
+};
+
+firebase.initializeApp(firebaseConfig);
+
+const auth = firebase.auth();
+const db = firebase.firestore();
+</script> 
+ <script>
 const $=q=>document.querySelector(q),pad=n=>String(n).padStart(2,'0'),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const dkey=d=>{d=d||new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())};
 const M=t=>{const[a,b]=t.split(':');return +a*60+ +b},T=m=>{const h=Math.floor(m/60)%24;return(h%12||12)+':'+pad(m%60)+(h<12?' AM':' PM')};
@@ -79,7 +98,14 @@ const mkSched=()=>DEF.map((a,i)=>({id:'a'+i,name:a[0],s:a[1],e:a[2],cat:a[3],ala
 let S;try{S=JSON.parse(localStorage.getItem('dayflow')||'null')}catch(e){S=null}
 if(!S||!Array.isArray(S.sched))S={sched:mkSched(),logs:{},day:{},cfg:{alarm:true,snd:'clock',vol:.9,theme:'dark'},run:null,rung:{}};
 S.cfg=S.cfg||{};S.logs=S.logs||{};S.day=S.day||{};S.rung=S.rung||{};
-const save=()=>{try{localStorage.setItem('dayflow',JSON.stringify(S))}catch(e){alert('Could not save: browser storage is full or blocked.')}};
+const save=()=>{
+  try {
+    localStorage.setItem('dayflow',JSON.stringify(S));
+    queueCloudSave();
+  } catch(e) {
+    alert('Could not save: browser storage is full or blocked.');
+  }
+};
 let vdate=dkey(),tab='today',ringTimer=null;
 const acts=()=>S.sched.filter(a=>a.on).sort((a,b)=>M(a.s)-M(b.s));
 const L=(id,d)=>{d=d||dkey();S.logs[d]=S.logs[d]||{};return S.logs[d][id]=S.logs[d][id]||{status:'not_started',notes:[],checks:[],pomo:0,intr:0,paused:0,dur:0}};
@@ -305,4 +331,113 @@ function wExp(k){const r=wrep(),b='Yogi-Tracker-'+r.wk,n=k==='p'?b+'.pdf':k==='d
  const x=$('#wxs');if(x){x.textContent='✔ Downloaded '+n;setTimeout(()=>x.textContent='',4000)}}
 showQ(qi);
 loadCus();go('today');setInterval(()=>{tick();if(tab==='today'&&S.run&&new Date().getSeconds()===0)renderToday()},1000);
+  
+</script>
+
+<script>
+const cloudButton = document.createElement('button');
+cloudButton.textContent = 'Sign in with Google';
+cloudButton.style.margin = '8px';
+document.querySelector('header').appendChild(cloudButton);
+
+let cloudApplying = false;
+let cloudTimer = null;
+let cloudUnsubscribe = null;
+let cloudStarted = false;
+
+const cloudDoc = uid =>
+  db.collection('users').doc(uid)
+    .collection('dayflow').doc('main');
+
+function queueCloudSave() {
+  if (!auth.currentUser || cloudApplying) return;
+
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(async () => {
+    try {
+      await cloudDoc(auth.currentUser.uid).set({
+        data: S,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      cloudButton.textContent = '☁ Synced';
+    } catch (e) {
+      cloudButton.textContent = 'Sync failed';
+      console.error(e);
+      alert('Cloud save failed: ' + e.message);
+    }
+  }, 1000);
+}
+
+cloudButton.onclick = async () => {
+  try {
+    await auth.signInWithPopup(
+      new firebase.auth.GoogleAuthProvider()
+    );
+  } catch (e) {
+    alert('Google sign-in failed: ' + e.message);
+  }
+};
+
+auth.onAuthStateChanged(async user => {
+  if (!user) {
+    cloudButton.textContent = 'Sign in with Google';
+    return;
+  }
+
+  if (cloudStarted) return;
+  cloudStarted = true;
+  cloudButton.textContent = 'Connecting...';
+
+  try {
+    const ref = cloudDoc(user.uid);
+    const snap = await ref.get();
+
+    if (snap.exists && snap.data().data) {
+      const useCloud = confirm(
+        'Cloud data already exists. OK = use cloud data. Cancel = upload this device data.'
+      );
+
+      if (useCloud) {
+        cloudApplying = true;
+        S = snap.data().data;
+        localStorage.setItem('dayflow', JSON.stringify(S));
+        cloudApplying = false;
+        render();
+      } else {
+        await ref.set({
+          data: S,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+    } else {
+      await ref.set({
+        data: S,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    cloudUnsubscribe = ref.onSnapshot(snapshot => {
+      if (!snapshot.exists || !snapshot.data().data) return;
+
+      const remote = snapshot.data().data;
+      if (JSON.stringify(remote) === JSON.stringify(S)) return;
+
+      cloudApplying = true;
+      S = remote;
+      localStorage.setItem('dayflow', JSON.stringify(S));
+      cloudApplying = false;
+      render();
+      cloudButton.textContent = '☁ Synced';
+    });
+
+    cloudButton.textContent = '☁ Synced';
+  } catch (e) {
+    cloudApplying = false;
+    cloudStarted = false;
+    cloudButton.textContent = 'Sync error';
+    alert('Firebase error: ' + e.message);
+  }
+});
 </script></body></html>
+
+
