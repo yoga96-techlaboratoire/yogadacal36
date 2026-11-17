@@ -413,7 +413,8 @@ auth.onAuthStateChanged(async user => {
   cloudStarted = false;
 
   if (!user) {
-    cloudButton.style.display = 'none';
+    cloudButton.style.display = '';
+    cloudButton.textContent = 'Admin / Editor sign in';
     document.body.classList.add('public-mode');
     document.body.classList.remove('member-mode');
     db.collection('publicWorkspaces').doc('dayflow-main').onSnapshot(snapshot => {
@@ -427,7 +428,7 @@ auth.onAuthStateChanged(async user => {
       const rows=Array.isArray(data.schedule)?data.schedule:[];
       table.innerHTML='<tr><th>Activity</th><th>Start</th><th>End</th><th>Category</th></tr>'+
         rows.map(a=>'<tr><td>'+esc(a.name)+'</td><td>'+esc(a.start)+'</td><td>'+esc(a.end)+'</td><td>'+esc(a.category)+'</td></tr>').join('');
-    },error=>{document.getElementById('pubStatus').textContent='Unable to load the public timetable.';console.error(error)});
+    },error=>{document.getElementById('pubStatus').textContent='Public timetable is not published yet, or access is unavailable.';console.error(error)});
     return;
   }
   cloudButton.style.display = '';
