@@ -333,22 +333,23 @@ loadCus();go('today');setInterval(()=>{tick();if(tab==='today'&&S.run&&new Date(
   
 </script>
 <script>
+
 const cloudButton = document.createElement('button');
 cloudButton.textContent = 'Sign in with Google';
 cloudButton.style.margin = '8px';
 document.querySelector('header').appendChild(cloudButton);
+
+const workspaceId = 'dayflow-main';
+const workspaceRef = db.collection('workspaces').doc(workspaceId);
+const sharedRef = workspaceRef.collection('schedule').doc('main');
 
 let cloudApplying = false;
 let cloudTimer = null;
 let cloudUnsubscribe = null;
 let cloudStarted = false;
 
-const cloudDoc = uid =>
-  db.collection('users').doc(uid)
-    .collection('dayflow').doc('main');
-
 function queueCloudSave() {
-  if (!auth.currentUser || cloudApplying) return;
+  if (!auth.currentUser || cloudApplying || !cloudStarted) return;
 
   clearTimeout(cloudTimer);
 
@@ -357,16 +358,17 @@ function queueCloudSave() {
       const user = auth.currentUser;
       if (!user) return;
 
-      await cloudDoc(user.uid).set({
+      await sharedRef.set({
         data: S,
+        updatedBy: user.uid,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
 
-      cloudButton.textContent = 'Sign out';
+      cloudButton.textContent = '☁ Shared workspace synced';
     } catch (e) {
-      cloudButton.textContent = 'Sync failed';
       console.error(e);
-      alert('Cloud save failed: ' + e.message);
+      cloudButton.textContent = 'Sync failed';
+      alert('Shared cloud save failed: ' + e.message);
     }
   }, 1000);
 }
@@ -386,54 +388,101 @@ cloudButton.onclick = async () => {
 };
 
 auth.onAuthStateChanged(async user => {
+  if (cloudUnsubscribe) {
+    cloudUnsubscribe();
+    cloudUnsubscribe = null;
+  }
+
+  clearTimeout(cloudTimer);
+  cloudStarted = false;
 
   if (!user) {
-    if (cloudUnsubscribe) {
-      cloudUnsubscribe();
-      cloudUnsubscribe = null;
-    }
-
-    clearTimeout(cloudTimer);
-    cloudStarted = false;
     cloudButton.textContent = 'Sign in with Google';
     return;
   }
 
-  cloudButton.textContent = 'Sign out';
-
-  if (cloudStarted) return;
-  cloudStarted = true;
-  cloudButton.textContent = 'Connecting...';
+  cloudButton.textContent = 'Checking membership...';
 
   try {
-    const ref = cloudDoc(user.uid);
-    const snap = await ref.get();
+    // Check the signed-in user's membership.
+    const memberSnap = await workspaceRef
+      .collection('members').doc(user.uid).get();
 
-    if (snap.exists && snap.data().data) {
-      const useCloud = confirm(
-        'Cloud data already exists. OK = use cloud data. Cancel = upload this device data.'
-      );
-
-      if (useCloud) {
-        cloudApplying = true;
-        S = snap.data().data;
-        localStorage.setItem('dayflow', JSON.stringify(S));
-        cloudApplying = false;
-        render();
-      } else {
-        await ref.set({
-          data: S,
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-      }
-    } else {
-      await ref.set({
-        data: S,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+    if (!memberSnap.exists ||
+        memberSnap.data().active !== true) {
+      await auth.signOut();
+      alert('This Google account is not an active workspace member.');
+      return;
     }
 
-    cloudUnsubscribe = ref.onSnapshot(snapshot => {
+    const member = memberSnap.data();
+
+    if (!['admin', 'editor', 'viewer'].includes(member.role)) {
+      await auth.signOut();
+      alert('Invalid workspace role.');
+      return;
+    }
+
+    cloudButton.textContent = 'Connecting to shared workspace...';
+
+    // Load the existing shared document.
+    let sharedSnap = await sharedRef.get();
+
+    if (!sharedSnap.exists) {
+      // Only the workspace owner may initialize shared data.
+      const workspaceSnap = await workspaceRef.get();
+
+      if (!workspaceSnap.exists ||
+          workspaceSnap.data().ownerUid !== user.uid) {
+        alert('The owner must initialize the shared schedule first.');
+        await auth.signOut();
+        return;
+      }
+
+      // Preserve the existing personal cloud data during migration.
+      const personalRef = db.collection('users').doc(user.uid)
+        .collection('dayflow').doc('main');
+
+      const personalSnap = await personalRef.get();
+
+      if (personalSnap.exists && personalSnap.data().data) {
+        if (confirm(
+          'Your existing personal cloud backup was found. ' +
+          'OK = migrate that backup to the shared workspace. ' +
+          'Cancel = use this device data instead.'
+        )) {
+          S = personalSnap.data().data;
+          localStorage.setItem('dayflow', JSON.stringify(S));
+          render();
+        }
+      }
+
+      await sharedRef.set({
+        data: S,
+        updatedBy: user.uid,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      sharedSnap = await sharedRef.get();
+    }
+
+    if (!sharedSnap.exists || !sharedSnap.data().data) {
+      throw new Error('Shared schedule document has no data.');
+    }
+
+    // Always load the shared schedule on this device.
+    cloudApplying = true;
+    S = sharedSnap.data().data;
+    localStorage.setItem('dayflow', JSON.stringify(S));
+    render();
+    cloudApplying = false;
+
+    cloudStarted = true;
+    cloudButton.textContent =
+      '☁ ' + member.role.toUpperCase() + ' · Shared workspace';
+
+    // Listen for changes made by other members.
+    cloudUnsubscribe = sharedRef.onSnapshot(snapshot => {
       if (!snapshot.exists || !snapshot.data().data) return;
 
       const remote = snapshot.data().data;
@@ -441,25 +490,20 @@ auth.onAuthStateChanged(async user => {
       if (JSON.stringify(remote) === JSON.stringify(S)) return;
 
       cloudApplying = true;
-
       S = remote;
       localStorage.setItem('dayflow', JSON.stringify(S));
-
-      cloudApplying = false;
       render();
+      cloudApplying = false;
 
-      cloudButton.textContent = 'Sign out';
+      cloudButton.textContent = '☁ Shared changes received';
     });
-
-    cloudButton.textContent = 'Sign out';
 
   } catch (e) {
     cloudApplying = false;
     cloudStarted = false;
-    cloudButton.textContent = 'Sync error';
     console.error(e);
-    alert('Firebase error: ' + e.message);
+    cloudButton.textContent = 'Sync error';
+    alert('Workspace connection failed: ' + e.message);
   }
 });
 </script></body></html>
-
