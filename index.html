@@ -250,11 +250,56 @@ function detail(id){const a=byId(id),l=L(id);
  <label><input type="checkbox" ${a.alarm?'checked':''} onchange="byId('${id}').alarm=this.checked;save()"> Start/end alarm</label><span class="mut">Sessions done: ${l.pomo}</span></div>
  <h3>Checklist</h3>${l.checks.map((c,i)=>`<div class="row"><label><input type="checkbox" ${c.d?'checked':''} onchange="tickC('${id}',${i},this.checked)"> ${esc(c.t)}</label><button onclick="delC('${id}',${i})">×</button></div>`).join('')}
  <div class="row"><input id="ci" placeholder="Add item (e.g. JOIN)"><button onclick="addC('${id}')">Add</button><button onclick="allC('${id}')">Mark all done</button></div>
+ <div class="card" style="margin:10px 0;padding:10px">
+  <b>Import checklist from JSON</b>
+  <p class="mut" style="margin:4px 0 8px">Choose a .json checklist file, then import its items into this activity.</p>
+  <div class="row"><input id="checkJsonFile" type="file" accept=".json,application/json" style="max-width:100%"><button onclick="importChecklistJSON('${id}')">Import JSON</button></div>
+  <small id="checkJsonStatus" class="mut"></small>
+ </div>
  <h3>Notes</h3>${l.notes.map(n=>`<p style="margin:4px 0"><span class="mut">${new Date(n.t).toLocaleTimeString()}</span> ${esc(n.x)}</p>`).join('')||'<p class="mut">No notes yet.</p>'}
  <textarea id="ni" rows="3" style="width:100%" placeholder="Learning summary, mistake, question, code snippet, revision point"></textarea>
  <div class="row" style="margin-top:10px"><button class="pri" onclick="addN('${id}')">Save note</button><button onclick="closeM();render()">Close</button></div>`)}
 const setPom=(id,v)=>{const p=v.split(',');byId(id).pf=+p[0];byId(id).pb=+p[1];save()};
 const addC=id=>{const t=$('#ci').value.trim();if(t){L(id).checks.push({t,d:false});save();detail(id)}};
+function checklistItemsFromJSON(data){
+  // Accept a plain array, or common wrappers such as {items:[]}, {tasks:[]}, {checklist:[]}.
+  let items=Array.isArray(data)?data:null;
+  if(!items&&data&&typeof data==='object'){
+    for(const key of ['items','tasks','checklist','todos','steps']){
+      if(Array.isArray(data[key])){items=data[key];break}
+    }
+  }
+  if(!items)throw new Error('JSON format not recognized. Use an array or an object containing items, tasks, checklist, todos, or steps.');
+  return items.map(item=>{
+    if(typeof item==='string')return item.trim();
+    if(item&&typeof item==='object'){
+      const value=item.t??item.text??item.title??item.name??item.task??item.label??item.description;
+      return value==null?'':String(value).trim();
+    }
+    return '';
+  }).filter(Boolean);
+}
+async function importChecklistJSON(id){
+  const fileInput=$('#checkJsonFile'),status=$('#checkJsonStatus');
+  const file=fileInput&&fileInput.files&&fileInput.files[0];
+  if(!file){if(status)status.textContent='Please choose a JSON file first.';return}
+  try{
+    const raw=await file.text();
+    const parsed=JSON.parse(raw);
+    const items=checklistItemsFromJSON(parsed);
+    if(!items.length)throw new Error('No checklist items were found in this JSON file.');
+    const checks=L(id).checks;
+    const existing=new Set(checks.map(c=>String(c.t||'').trim().toLowerCase()));
+    let added=0;
+    items.forEach(t=>{if(!existing.has(t.toLowerCase())){checks.push({t,d:false});existing.add(t.toLowerCase());added++}});
+    save();
+    detail(id);
+    alert('Imported '+added+' checklist item(s).'+(items.length-added?' '+(items.length-added)+' duplicate item(s) were skipped.':''));
+  }catch(error){
+    if(status)status.textContent='Import failed: '+error.message;
+    else alert('Checklist import failed: '+error.message);
+  }
+}
 const tickC=(id,i,v)=>{L(id).checks[i].d=v;save()},delC=(id,i)=>{L(id).checks.splice(i,1);save();detail(id)},allC=id=>{L(id).checks.forEach(c=>c.d=true);save();detail(id)};
 const addN=id=>{const x=$('#ni').value.trim();if(x){L(id).notes.push({t:Date.now(),x});save();detail(id)}};
 const openM=h=>{$('#mb').innerHTML=h;$('#modal').style.display='flex'},closeM=()=>$('#modal').style.display='none';
