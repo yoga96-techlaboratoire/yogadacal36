@@ -116,43 +116,66 @@ const DEF=[['Wakeup','04:45','04:45','Personal'],['Brush and refresh','04:45','0
 const mkSched=()=>DEF.map((a,i)=>({id:'a'+i,name:a[0],s:a[1],e:a[2],cat:a[3],alarm:true,on:true,pf:25,pb:5}));
 let S;try{S=JSON.parse(localStorage.getItem('dayflow')||'null')}catch(e){S=null}
 if(!S||!Array.isArray(S.sched))S={sched:mkSched(),logs:{},day:{},cfg:{alarm:true,snd:'clock',vol:.9,theme:'dark'},run:null,rung:{}};
-S.cfg=S.cfg||{};S.logs=S.logs||{};S.day=S.day||{};S.rung=S.rung||{};
-S.schedHistory=S.schedHistory||{};
-const cloneSched=arr=>JSON.parse(JSON.stringify(arr||[]));
-const scheduleForDate=d=>S.schedHistory[d]||(S.weekSched||{})[dayKeyForDate(new Date(d+'T12:00:00'))]||S.sched;
+const cloneSched=arr=>JSON.parse(JSON.stringify(Array.isArray(arr)?arr:[]));
+function normalizeDayflowState(state){
+  // Cloud documents created by older app versions may not contain weekly schedule fields.
+  if(!state || typeof state!=='object') state={};
+  if(!Array.isArray(state.sched)) state.sched=mkSched();
+  if(!state.logs || typeof state.logs!=='object' || Array.isArray(state.logs)) state.logs={};
+  if(!state.day || typeof state.day!=='object') state.day={};
+  if(!state.cfg || typeof state.cfg!=='object') state.cfg={alarm:true,snd:'clock',vol:.9,theme:'dark'};
+  if(!state.rung || typeof state.rung!=='object') state.rung={};
+  if(!state.schedHistory || typeof state.schedHistory!=='object' || Array.isArray(state.schedHistory)) state.schedHistory={};
+  if(!state.weekSched || typeof state.weekSched!=='object' || Array.isArray(state.weekSched)) state.weekSched={};
+  return state;
+}
+S=normalizeDayflowState(S);
+const scheduleForDate=d=>{
+  S=normalizeDayflowState(S);
+  const dateText=String(d||dkey());
+  const dt=new Date(dateText+'T12:00:00');
+  const weekday=Number.isNaN(dt.getTime())?dayKeyForDate(new Date()):dayKeyForDate(dt);
+  const dated=S.schedHistory[dateText];
+  const weekly=S.weekSched[weekday];
+  return cloneSched(Array.isArray(dated)?dated:Array.isArray(weekly)?weekly:S.sched);
+};
 function freezeExistingScheduleDays(){
-  // Preserve the schedule currently in use for days that already have activity logs.
-  // This runs before the schedule editor is shown, before the user can change anything.
-  Object.keys(S.logs||{}).forEach(d=>{
-    if(!S.schedHistory[d] && Object.keys(S.logs[d]||{}).length)
+  S=normalizeDayflowState(S);
+  Object.keys(S.logs).forEach(d=>{
+    if(!Array.isArray(S.schedHistory[d]) && Object.keys(S.logs[d]||{}).length)
       S.schedHistory[d]=cloneSched(S.sched);
   });
-  if(!S.schedHistory[dkey()]) S.schedHistory[dkey()]=cloneSched(S.sched);
+  if(!Array.isArray(S.schedHistory[dkey()])) S.schedHistory[dkey()]=cloneSched(S.sched);
 }
 function saveCurrentDateSchedule(){
+  S=normalizeDayflowState(S);
   S.schedHistory[dkey()]=cloneSched(S.sched);
 }
 const DAY_KEYS=['sun','mon','tue','wed','thu','fri','sat'];
 const DAY_NAMES=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const dayKeyForDate=d=>DAY_KEYS[(d||new Date()).getDay()];
-S.weekSched=S.weekSched||{};
+S=normalizeDayflowState(S);
 DAY_KEYS.forEach(k=>{if(!Array.isArray(S.weekSched[k]))S.weekSched[k]=cloneSched(S.sched)});
 let scheduleEditorDay=dayKeyForDate(new Date());
 function ensureWeekSchedules(){
-  S.weekSched=S.weekSched||{};
+  S=normalizeDayflowState(S);
   DAY_KEYS.forEach(k=>{if(!Array.isArray(S.weekSched[k]))S.weekSched[k]=cloneSched(S.sched||mkSched())});
 }
 function loadEditorDay(k){
+  S=normalizeDayflowState(S);
   ensureWeekSchedules();
   scheduleEditorDay=DAY_KEYS.includes(k)?k:dayKeyForDate(new Date());
   S.sched=cloneSched(S.weekSched[scheduleEditorDay]||mkSched());
 }
 function activateTodaySchedule(){
+  S=normalizeDayflowState(S);
   ensureWeekSchedules();
   const k=dayKeyForDate(new Date());
   S.sched=cloneSched(S.weekSched[k]||S.sched||mkSched());
 }
 function saveEditorDay(){
+  S=normalizeDayflowState(S);
+  if(!DAY_KEYS.includes(scheduleEditorDay))scheduleEditorDay=dayKeyForDate(new Date());
   S.weekSched[scheduleEditorDay]=cloneSched(S.sched);
   if(scheduleEditorDay===dayKeyForDate(new Date()))saveCurrentDateSchedule();
 }
@@ -237,6 +260,7 @@ const addN=id=>{const x=$('#ni').value.trim();if(x){L(id).notes.push({t:Date.now
 const openM=h=>{$('#mb').innerHTML=h;$('#modal').style.display='flex'},closeM=()=>$('#modal').style.display='none';
 // schedule editor
 function renderSched(){
+  S=normalizeDayflowState(S);
   freezeExistingScheduleDays();
   if(!Array.isArray(S.sched))S.sched=mkSched();
   const picker=$('#scheduleDay');
@@ -269,7 +293,7 @@ const dupAct=id=>{readRows();const a=byId(id);if(!a)return;S.sched.push({...a,id
 const delAct=id=>{if(confirm('Delete this activity from '+DAY_NAMES[DAY_KEYS.indexOf(scheduleEditorDay)]+' only?')){readRows();S.sched=S.sched.filter(a=>a.id!==id);saveEditorDay();save();renderSched()}};
 const restoreSched=()=>{if(confirm('Restore the original timetable for '+DAY_NAMES[DAY_KEYS.indexOf(scheduleEditorDay)]+' only? Other weekdays and previous logs will be kept.')){S.sched=mkSched();saveEditorDay();save();renderSched()}};
 // review
-function renderReview(){$('#vd').value=vdate;const daySched=scheduleForDate(vdate),lg=S.logs[vdate]||{},d=S.day[vdate]||{};let c={completed:0,partial:0,failed:0,skipped:0},prod=0,learn=0,intr=0,pom=0,jobs=0,gh=0,prac=0;
+function renderReview(){S=normalizeDayflowState(S);$('#vd').value=vdate;const daySched=scheduleForDate(vdate),lg=S.logs[vdate]||{},d=S.day[vdate]||{};let c={completed:0,partial:0,failed:0,skipped:0},prod=0,learn=0,intr=0,pom=0,jobs=0,gh=0,prac=0;
  const rows=daySched.slice().sort((a,b)=>M(a.s)-M(b.s)).filter(a=>lg[a.id]);
  rows.forEach(a=>{const l=lg[a.id];if(c[l.status]!==undefined)c[l.status]++;prod+=l.dur;intr+=l.intr;pom+=l.pomo;if(a.cat==='Learning')learn+=l.dur;if(l.status==='completed'){if(a.cat==='Job')jobs++;if(a.cat==='Portfolio')gh++;if(a.cat==='Practice')prac++}});
  const tot=daySched.filter(a=>a.on).length||1,pc=Math.round((c.completed+c.partial*.5)/tot*100),sug=pc>=80?'Usable':pc>=50?'Middle':'Wasted';
@@ -360,7 +384,7 @@ function expMD(){const daySched=scheduleForDate(vdate),g=S.logs[vdate]||{},d=S.d
  daySched.slice().sort((a,b)=>M(a.s)-M(b.s)).forEach(a=>{const l=g[a.id];if(!l)return;s+=`## ${a.name} (${a.s}–${a.e})\n- Status: ${ST[l.status]}\n- Actual: ${Math.round(l.dur/6e4)} min, Pomodoros: ${l.pomo}, interruptions: ${l.intr}\n`;
   if(l.fail)s+=`- Failure: ${l.fail.reason}. ${l.fail.explain||''}\n- Next time: ${l.fail.next||''}\n`;l.checks.forEach(c=>s+=`- [${c.d?'x':' '}] ${c.t}\n`);l.notes.forEach(n=>s+=`- Note: ${n.x}\n`);s+='\n'});
  dl(`dayflow-${vdate}.md`,s,'text/markdown')}
-function impJSON(i){const f=i.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const o=JSON.parse(r.result);if(!Array.isArray(o.sched)||typeof o.logs!=='object')throw 0;if(confirm('Replace current data with this backup?')){S=o;save();location.reload()}}catch(e){alert('That file is not a valid Dayflow backup.')}};r.readAsText(f)}
+function impJSON(i){const f=i.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const o=JSON.parse(r.result);if(!Array.isArray(o.sched)||typeof o.logs!=='object')throw 0;if(confirm('Replace current data with this backup?')){S=normalizeDayflowState(o);save();location.reload()}}catch(e){alert('That file is not a valid Dayflow backup.')}};r.readAsText(f)}
 function clearAll(){if(confirm('Delete ALL schedule edits, logs, notes and settings? Export a backup first.')&&confirm('This cannot be undone. Continue?')){localStorage.removeItem('dayflow');location.reload()}}
 document.documentElement.dataset.theme=S.cfg.theme||'dark';
 $('#modal').addEventListener('click',e=>{if(e.target.id==='modal'){closeM();render()}});
@@ -629,7 +653,7 @@ auth.onAuthStateChanged(async user => {
           'OK = migrate that backup to the shared workspace. ' +
           'Cancel = use this device data instead.'
         )) {
-          S = personalSnap.data().data;
+          S = normalizeDayflowState(personalSnap.data().data);
           localStorage.setItem('dayflow', JSON.stringify(S));
           render();
         }
@@ -648,7 +672,7 @@ auth.onAuthStateChanged(async user => {
     }
 
     cloudApplying = true;
-    S = sharedSnap.data().data;
+    S = normalizeDayflowState(sharedSnap.data().data);
     localStorage.setItem('dayflow', JSON.stringify(S));
     render();
     cloudApplying = false;
@@ -661,7 +685,7 @@ auth.onAuthStateChanged(async user => {
       const remote = snapshot.data().data;
       if (JSON.stringify(remote) === JSON.stringify(S)) return;
       cloudApplying = true;
-      S = remote;
+      S = normalizeDayflowState(remote);
       localStorage.setItem('dayflow', JSON.stringify(S));
       render();
       cloudApplying = false;
@@ -698,7 +722,7 @@ function loadPublicDashboard() {
         return;
       }
       cloudApplying = true;
-      S = remote;
+      S = normalizeDayflowState(remote);
       localStorage.setItem('dayflow', JSON.stringify(S));
       document.documentElement.dataset.theme = S.cfg && S.cfg.theme || 'dark';
       cloudApplying = false;
