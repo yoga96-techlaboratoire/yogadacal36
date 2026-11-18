@@ -12,7 +12,7 @@ header{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;padding:12px 
 header b{font-family:Georgia,serif;font-size:20px;letter-spacing:.3px}
 nav{display:flex;gap:4px;flex-wrap:wrap}nav button{border-color:transparent;background:none}nav button.on{background:var(--p2);color:var(--acc);border-color:var(--ln)}
 main{max-width:1100px;margin:0 auto;padding:20px}.tab{display:none}.tab.on{display:block}
-.clock{font:700 clamp(44px,9vw,84px)/1 Georgia,serif;color:var(--acc);font-variant-numeric:tabular-nums}
+.clock{font:700 clamp(30px,5vw,48px)/1 Georgia,serif;color:var(--acc);font-variant-numeric:tabular-nums}
 .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
 .card{background:var(--p);border:1px solid var(--ln);border-radius:12px;padding:16px;margin-bottom:16px}
 h2{font:600 18px Georgia,serif;margin:0 0 10px}h3{margin:14px 0 6px;font-size:15px}
@@ -78,7 +78,7 @@ body.member-mode #nav, body.member-mode main{visibility:visible}
  <h3>My own sounds</h3><div class="row"><label class="mut">Add audio files (MP3, WAV, OGG, M4A) <input type="file" id="sup" accept="audio/*" multiple onchange="addSounds(this)"></label><button class="bad" onclick="delSound()">Remove selected sound</button></div>
  <p class="mut">Pick your sound in the list above. It loops until you press Stop. Your sounds stay in this browser and are not part of the JSON backup, so add them again on a new browser.</p>
  <p class="mut">Alarms ring continuously until you press Stop (or 5 minutes pass). Click anywhere on the page once after opening it so the browser allows sound. Alarms ring only while this tab is open. Browser throttling, sleep mode or a closed tab can delay or prevent them.</p></div>
- <div class="card"><h2>Backup</h2><div class="row"><button onclick="expJSON()">Export JSON</button><button onclick="expCSV()">Export CSV (all logs)</button><button onclick="expMD()">Day report (.md)</button>
+ <div class="card"><h2>Backup</h2><div class="row"><button onclick="expJSON()">Export JSON</button><button onclick="expCSV()">Export CSV (all logs)</button><button onclick="expMD()">Day report (.md)</button><button onclick="expPDF()">Daily report (Print / Save PDF)</button>
  <label class="mut">Import JSON <input type="file" accept=".json" onchange="impJSON(this)"></label></div>
  <p class="mut">The weekly tracker exports PDF, Word and Excel from its own tab. Full daily logs export here as JSON, CSV and Markdown.</p>
  <button class="bad" onclick="clearAll()">Clear all data</button></div></section>
@@ -112,6 +112,24 @@ const mkSched=()=>DEF.map((a,i)=>({id:'a'+i,name:a[0],s:a[1],e:a[2],cat:a[3],ala
 let S;try{S=JSON.parse(localStorage.getItem('dayflow')||'null')}catch(e){S=null}
 if(!S||!Array.isArray(S.sched))S={sched:mkSched(),logs:{},day:{},cfg:{alarm:true,snd:'clock',vol:.9,theme:'dark'},run:null,rung:{}};
 S.cfg=S.cfg||{};S.logs=S.logs||{};S.day=S.day||{};S.rung=S.rung||{};
+S.schedHistory=S.schedHistory||{};
+const cloneSched=arr=>JSON.parse(JSON.stringify(arr||[]));
+const scheduleForDate=d=>S.schedHistory[d]||S.sched;
+function freezeExistingScheduleDays(){
+  // Preserve the schedule currently in use for days that already have activity logs.
+  // This runs before the schedule editor is shown, before the user can change anything.
+  Object.keys(S.logs||{}).forEach(d=>{
+    if(!S.schedHistory[d] && Object.keys(S.logs[d]||{}).length)
+      S.schedHistory[d]=cloneSched(S.sched);
+  });
+  if(!S.schedHistory[dkey()]) S.schedHistory[dkey()]=cloneSched(S.sched);
+}
+function saveCurrentDateSchedule(){
+  S.schedHistory[dkey()]=cloneSched(S.sched);
+}
+// Start each new calendar date with the latest saved timetable.
+// Later edits on that date will not rewrite earlier date snapshots.
+if(!S.schedHistory[dkey()]) S.schedHistory[dkey()]=cloneSched(S.sched);
 const save=()=>{
   if (document.body.classList.contains('viewer-mode')) return;
   try {
@@ -184,31 +202,51 @@ const tickC=(id,i,v)=>{L(id).checks[i].d=v;save()},delC=(id,i)=>{L(id).checks.sp
 const addN=id=>{const x=$('#ni').value.trim();if(x){L(id).notes.push({t:Date.now(),x});save();detail(id)}};
 const openM=h=>{$('#mb').innerHTML=h;$('#modal').style.display='flex'},closeM=()=>$('#modal').style.display='none';
 // schedule editor
-function renderSched(){$('#sedit').innerHTML='<tr><th>On</th><th>Activity</th><th>Start</th><th>End</th><th>Category</th><th></th></tr>'+S.sched.slice().sort((a,b)=>M(a.s)-M(b.s)).map(a=>`<tr data-id="${a.id}"><td><input type="checkbox" class="o" ${a.on?'checked':''}></td><td><input class="n" value="${esc(a.name)}" style="width:100%;min-width:180px"></td><td><input class="s" type="time" value="${a.s}"></td><td><input class="e" type="time" value="${a.e}"></td><td><select class="c">${['Personal','Job','Learning','Practice','Portfolio','Interview','Rest'].map(c=>`<option ${c===a.cat?'selected':''}>${c}</option>`).join('')}</select></td><td class="row"><button onclick="dupAct('${a.id}')">Copy</button><button class="bad" onclick="delAct('${a.id}')">Delete</button></td></tr>`).join('')}
+function renderSched(){freezeExistingScheduleDays();$('#sedit').innerHTML='<tr><th>On</th><th>Activity</th><th>Start</th><th>End</th><th>Category</th><th></th></tr>'+S.sched.slice().sort((a,b)=>M(a.s)-M(b.s)).map(a=>`<tr data-id="${a.id}"><td><input type="checkbox" class="o" ${a.on?'checked':''}></td><td><input class="n" value="${esc(a.name)}" style="width:100%;min-width:180px"></td><td><input class="s" type="time" value="${a.s}"></td><td><input class="e" type="time" value="${a.e}"></td><td><select class="c">${['Personal','Job','Learning','Practice','Portfolio','Interview','Rest'].map(c=>`<option ${c===a.cat?'selected':''}>${c}</option>`).join('')}</select></td><td class="row"><button onclick="dupAct('${a.id}')">Copy</button><button class="bad" onclick="delAct('${a.id}')">Delete</button></td></tr>`).join('')}
 function readRows(){document.querySelectorAll('#sedit tr[data-id]').forEach(r=>{const a=byId(r.dataset.id);if(!a)return;a.on=r.querySelector('.o').checked;a.name=r.querySelector('.n').value||a.name;a.s=r.querySelector('.s').value||a.s;a.e=r.querySelector('.e').value||a.e;a.cat=r.querySelector('.c').value})}
 function saveSched(){readRows();const A=acts(),w=[];A.forEach((a,i)=>{if(M(a.e)<M(a.s))w.push(a.name+': ends before it starts');const b=A[i+1];if(b&&M(b.s)<M(a.e))w.push(`"${a.name}" overlaps "${b.name}"`)});
- if(w.length&&!confirm('Warnings:\n'+w.join('\n')+'\n\nSave anyway?'))return;save();renderSched();alert('Schedule saved.')}
-const addAct=()=>{readRows();S.sched.push({id:'c'+Date.now(),name:'New activity',s:'12:00',e:'12:30',cat:'Personal',alarm:true,on:true,pf:25,pb:5});save();renderSched()};
-const dupAct=id=>{readRows();const a=byId(id);S.sched.push({...a,id:'c'+Date.now(),name:a.name+' (copy)'});save();renderSched()};
-const delAct=id=>{if(confirm('Delete this activity? Past logs stay in your history.')){readRows();S.sched=S.sched.filter(a=>a.id!==id);save();renderSched()}};
-const restoreSched=()=>{if(confirm('Restore the original 26-activity timetable? Your edits to the schedule will be lost; logs are kept.')){S.sched=mkSched();save();renderSched()}};
+ if(w.length&&!confirm('Warnings:\n'+w.join('\n')+'\n\nSave anyway?'))return;saveCurrentDateSchedule();save();renderSched();alert('Schedule saved for '+dkey()+'. Previous dates keep their own timetable.')}
+const addAct=()=>{readRows();S.sched.push({id:'c'+Date.now(),name:'New activity',s:'12:00',e:'12:30',cat:'Personal',alarm:true,on:true,pf:25,pb:5});saveCurrentDateSchedule();save();renderSched()};
+const dupAct=id=>{readRows();const a=byId(id);S.sched.push({...a,id:'c'+Date.now(),name:a.name+' (copy)'});saveCurrentDateSchedule();save();renderSched()};
+const delAct=id=>{if(confirm('Delete this activity from today’s schedule? Past logs stay in their original dates.')){readRows();S.sched=S.sched.filter(a=>a.id!==id);saveCurrentDateSchedule();save();renderSched()}};
+const restoreSched=()=>{if(confirm('Restore the original 26-activity timetable for today only? Previous dates and their logs will be kept.')){S.sched=mkSched();saveCurrentDateSchedule();save();renderSched()}};
 // review
-function renderReview(){$('#vd').value=vdate;const lg=S.logs[vdate]||{},d=S.day[vdate]||{};let c={completed:0,partial:0,failed:0,skipped:0},prod=0,learn=0,intr=0,pom=0,jobs=0,gh=0,prac=0;
- const rows=S.sched.slice().sort((a,b)=>M(a.s)-M(b.s)).filter(a=>lg[a.id]);
+function renderReview(){$('#vd').value=vdate;const daySched=scheduleForDate(vdate),lg=S.logs[vdate]||{},d=S.day[vdate]||{};let c={completed:0,partial:0,failed:0,skipped:0},prod=0,learn=0,intr=0,pom=0,jobs=0,gh=0,prac=0;
+ const rows=daySched.slice().sort((a,b)=>M(a.s)-M(b.s)).filter(a=>lg[a.id]);
  rows.forEach(a=>{const l=lg[a.id];if(c[l.status]!==undefined)c[l.status]++;prod+=l.dur;intr+=l.intr;pom+=l.pomo;if(a.cat==='Learning')learn+=l.dur;if(l.status==='completed'){if(a.cat==='Job')jobs++;if(a.cat==='Portfolio')gh++;if(a.cat==='Practice')prac++}});
- const tot=acts().length||1,pc=Math.round((c.completed+c.partial*.5)/tot*100),sug=pc>=80?'Usable':pc>=50?'Middle':'Wasted';
+ const tot=daySched.filter(a=>a.on).length||1,pc=Math.round((c.completed+c.partial*.5)/tot*100),sug=pc>=80?'Usable':pc>=50?'Middle':'Wasted';
  $('#rev').innerHTML=`<div class="stats" style="margin:12px 0"><div><b>${c.completed}</b>completed</div><div><b>${c.partial}</b>partial</div><div><b>${c.failed}</b>failed</div><div><b>${Math.round(prod/6e4)} min</b>productive</div><div><b>${Math.round(learn/6e4)} min</b>learning</div><div><b>${prac}</b>practice done</div><div><b>${gh}</b>GitHub updates</div><div><b>${intr}</b>interruptions</div><div><b>${pom}</b>Pomodoros</div></div>
  <p class="mut">Suggestion from completion (${pc}%): ${sug}. Your own classification below always wins.</p>
  <div class="row dc">${[['usable','Usable day'],['middle','Middle day'],['wasted','Wasted day']].map(x=>`<button class="${d.cls===x[0]?'on':''}" onclick="cls('${x[0]}')">${x[1]}</button>`).join('')}</div>
  <label class="mut">Why did I classify today this way?</label><textarea id="why" rows="2" style="width:100%" onchange="S.day[vdate]=S.day[vdate]||{};S.day[vdate].why=this.value;save()">${esc(d.why||'')}</textarea>
  <div class="wrap"><table><tr><th>Activity</th><th>Status</th><th>Actual</th><th>Notes</th></tr>${rows.map(a=>{const l=lg[a.id];return`<tr><td>${esc(a.name)}</td><td class="s-${l.status}">${ST[l.status]}${l.fail?' · '+esc(l.fail.reason):''}</td><td>${Math.round(l.dur/6e4)} min</td><td>${l.notes.length} · ${l.checks.filter(x=>x.d).length}/${l.checks.length}</td></tr>`}).join('')||'<tr><td colspan="4" class="mut">No records for this date.</td></tr>'}</table></div>
- <button onclick="expMD()" style="margin-top:10px">Export this day (.md)</button>`;
- const R={},Q={},P={};Object.values(S.logs).forEach(day=>Object.entries(day).forEach(([id,l])=>{if(l.fail){R[l.fail.reason]=(R[l.fail.reason]||0)+1;const n=byId(id)?.name||id;Q[n]=(Q[n]||0)+1;if(l.fail.postponed==='Yes')P[n]=(P[n]||0)+1}}));
+ <div class="row" style="margin-top:10px"><button onclick="expMD()">Export this day (.md)</button><button onclick="expPDF()">Export this day (Print / Save PDF)</button></div>`;
+ const R={},Q={},P={};Object.entries(S.logs).forEach(([dayDate,day])=>Object.entries(day).forEach(([id,l])=>{if(l.fail){R[l.fail.reason]=(R[l.fail.reason]||0)+1;const n=(scheduleForDate(dayDate).find(a=>a.id===id)||{}).name||id;Q[n]=(Q[n]||0)+1;if(l.fail.postponed==='Yes')P[n]=(P[n]||0)+1}}));
  const bars=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>`<div class="row"><span style="flex:0 0 240px">${esc(k)}</span><div class="bar" style="flex:1"><i style="width:${v/Math.max(...Object.values(o))*100}%"></i></div><b>${v}</b></div>`).join('')||'<p class="mut">None recorded.</p>';
  $('#fa').innerHTML='<h3>Reasons</h3>'+bars(R)+'<h3>Most-missed activities</h3>'+bars(Q)+'<h3>Postponed</h3>'+bars(P);
  let w='';for(let i=6;i>=0;i--){const dt=new Date();dt.setDate(dt.getDate()-i);const k=dkey(dt),g=S.logs[k]||{},n=Object.values(g).filter(l=>l.status==='completed').length,t=Math.round(n/tot*100);w+=`<div class="row"><span style="flex:0 0 100px">${k.slice(5)} ${(S.day[k]||{}).cls||''}</span><div class="bar" style="flex:1"><i style="width:${Math.min(t,100)}%"></i></div><b>${t}%</b></div>`}
  $('#wk').innerHTML=w}
 const cls=v=>{S.day[vdate]=S.day[vdate]||{};S.day[vdate].cls=v;save();renderReview()};
+
+function expPDF(){
+  const daySched=scheduleForDate(vdate),g=S.logs[vdate]||{},d=S.day[vdate]||{};
+  const escHtml=x=>esc(x).replace(/\n/g,'<br>');
+  const rows=daySched.slice().sort((a,b)=>M(a.s)-M(b.s)).filter(a=>g[a.id]);
+  const body=rows.map(a=>{
+    const l=g[a.id];
+    return `<tr><td>${esc(a.name)}</td><td>${esc(a.s)}–${esc(a.e)}</td><td>${esc(ST[l.status]||l.status)}</td><td>${Math.round((l.dur||0)/60000)} min</td><td>${(l.notes||[]).map(n=>escHtml(n.x)).join('<br>')}</td></tr>`;
+  }).join('');
+  const w=window.open('','_blank');
+  if(!w){alert('Please allow pop-ups for this site, then choose Export PDF again.');return;}
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Dayflow report ${vdate}</title>
+  <style>body{font:14px Arial,sans-serif;color:#202630;margin:28px}h1{font-size:22px}p{line-height:1.5}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border:1px solid #bbb;padding:8px;text-align:left;vertical-align:top}th{background:#eee}small{color:#555}@media print{body{margin:14mm}button{display:none}}</style>
+  </head><body><h1>Dayflow Pro — Daily Report</h1><p><b>Date:</b> ${vdate}<br><b>Day classification:</b> ${esc(d.cls||'Not set')}<br><b>Reason:</b> ${escHtml(d.why||'Not provided')}</p>
+  <table><thead><tr><th>Activity</th><th>Scheduled</th><th>Status</th><th>Recorded time</th><th>Notes</th></tr></thead><tbody>${body||'<tr><td colspan="5">No activity records for this date.</td></tr>'}</tbody></table>
+  <p><small>Generated by Dayflow Pro</small></p><script>window.onload=()=>window.print();<\/script></body></html>`);
+  w.document.close();
+}
+
 // settings
 function renderSet(){renderSnd();$('#aon').checked=S.cfg.alarm!==false;$('#vol').value=S.cfg.vol??.9}
 const cfgSave=()=>{S.cfg.alarm=$('#aon').checked;S.cfg.snd=$('#snd').value;S.cfg.vol=+$('#vol').value;save()};
@@ -258,10 +296,10 @@ function tick(){const n=new Date(),h=n.getHours(),m=h*60+n.getMinutes();
 function dl(name,txt,mime){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type:mime}));a.download=name;a.click()}
 const expJSON=()=>dl('dayflow-backup-'+dkey()+'.json',JSON.stringify(S,null,1),'application/json');
 function expCSV(){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"',r=[['Date','Activity','Scheduled start','Scheduled end','Status','Actual start','Actual end','Duration min','Paused min','Pomodoros','Interruptions','Failure reason','Notes'].join(',')];
- Object.keys(S.logs).sort().forEach(d=>Object.entries(S.logs[d]).forEach(([id,l])=>{const a=byId(id)||{name:id,s:'',e:''};r.push([d,a.name,a.s,a.e,ST[l.status],l.as||'',l.ae||'',Math.round(l.dur/6e4),Math.round(l.paused/6e4),l.pomo,l.intr,l.fail?l.fail.reason:'',l.notes.map(n=>n.x).join(' | ')].map(q).join(','))}));
+ Object.keys(S.logs).sort().forEach(d=>Object.entries(S.logs[d]).forEach(([id,l])=>{const a=scheduleForDate(d).find(x=>x.id===id)||{name:id,s:'',e:''};r.push([d,a.name,a.s,a.e,ST[l.status],l.as||'',l.ae||'',Math.round(l.dur/6e4),Math.round(l.paused/6e4),l.pomo,l.intr,l.fail?l.fail.reason:'',l.notes.map(n=>n.x).join(' | ')].map(q).join(','))}));
  dl('dayflow-logs.csv',r.join('\n'),'text/csv')}
-function expMD(){const g=S.logs[vdate]||{},d=S.day[vdate]||{};let s=`# Dayflow report: ${vdate}\n\nClassification: ${d.cls||'not set'}\n${d.why?'\nWhy: '+d.why+'\n':''}\n`;
- S.sched.slice().sort((a,b)=>M(a.s)-M(b.s)).forEach(a=>{const l=g[a.id];if(!l)return;s+=`## ${a.name} (${a.s}–${a.e})\n- Status: ${ST[l.status]}\n- Actual: ${Math.round(l.dur/6e4)} min, Pomodoros: ${l.pomo}, interruptions: ${l.intr}\n`;
+function expMD(){const daySched=scheduleForDate(vdate),g=S.logs[vdate]||{},d=S.day[vdate]||{};let s=`# Dayflow report: ${vdate}\n\nClassification: ${d.cls||'not set'}\n${d.why?'\nWhy: '+d.why+'\n':''}\n`;
+ daySched.slice().sort((a,b)=>M(a.s)-M(b.s)).forEach(a=>{const l=g[a.id];if(!l)return;s+=`## ${a.name} (${a.s}–${a.e})\n- Status: ${ST[l.status]}\n- Actual: ${Math.round(l.dur/6e4)} min, Pomodoros: ${l.pomo}, interruptions: ${l.intr}\n`;
   if(l.fail)s+=`- Failure: ${l.fail.reason}. ${l.fail.explain||''}\n- Next time: ${l.fail.next||''}\n`;l.checks.forEach(c=>s+=`- [${c.d?'x':' '}] ${c.t}\n`);l.notes.forEach(n=>s+=`- Note: ${n.x}\n`);s+='\n'});
  dl(`dayflow-${vdate}.md`,s,'text/markdown')}
 function impJSON(i){const f=i.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const o=JSON.parse(r.result);if(!Array.isArray(o.sched)||typeof o.logs!=='object')throw 0;if(confirm('Replace current data with this backup?')){S=o;save();location.reload()}}catch(e){alert('That file is not a valid Dayflow backup.')}};r.readAsText(f)}
