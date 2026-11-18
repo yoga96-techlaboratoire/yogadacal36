@@ -66,6 +66,11 @@ body.member-mode #nav, body.member-mode main{visibility:visible}
 <section class="tab" id="t-week"></section>
 <section class="tab" id="t-sched"><div class="card wrap"><h2>Edit schedule</h2>
  <p class="mut">Times are 24-hour (13:00 = 1 PM). The 18:45–18:50 gap is left free on purpose.</p>
+  <div class="row" style="margin:12px 0"><label for="scheduleDay"><b>Edit which day?</b></label>
+  <select id="scheduleDay" onchange="changeScheduleDay(this.value)">
+  <option value="sun">Sunday</option><option value="mon">Monday</option><option value="tue">Tuesday</option>
+  <option value="wed">Wednesday</option><option value="thu">Thursday</option><option value="fri">Friday</option><option value="sat">Saturday</option>
+  </select><span class="mut">Each day has its own activities and times.</span></div>
  <table id="sedit"></table><div class="row" style="margin-top:12px"><button onclick="addAct()">Add activity</button><button class="pri" onclick="saveSched()">Save changes</button><button class="bad" onclick="restoreSched()">Restore original timetable</button></div></div></section>
 <section class="tab" id="t-review">
  <div class="card"><div class="row"><h2 style="margin:0">Review day</h2><input type="date" id="vd" onchange="vdate=this.value;renderReview()"></div><div id="rev"></div></div>
@@ -114,7 +119,7 @@ if(!S||!Array.isArray(S.sched))S={sched:mkSched(),logs:{},day:{},cfg:{alarm:true
 S.cfg=S.cfg||{};S.logs=S.logs||{};S.day=S.day||{};S.rung=S.rung||{};
 S.schedHistory=S.schedHistory||{};
 const cloneSched=arr=>JSON.parse(JSON.stringify(arr||[]));
-const scheduleForDate=d=>S.schedHistory[d]||S.sched;
+const scheduleForDate=d=>S.schedHistory[d]||(S.weekSched||{})[dayKeyForDate(new Date(d+'T12:00:00'))]||S.sched;
 function freezeExistingScheduleDays(){
   // Preserve the schedule currently in use for days that already have activity logs.
   // This runs before the schedule editor is shown, before the user can change anything.
@@ -126,6 +131,30 @@ function freezeExistingScheduleDays(){
 }
 function saveCurrentDateSchedule(){
   S.schedHistory[dkey()]=cloneSched(S.sched);
+}
+const DAY_KEYS=['sun','mon','tue','wed','thu','fri','sat'];
+const DAY_NAMES=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const dayKeyForDate=d=>DAY_KEYS[(d||new Date()).getDay()];
+S.weekSched=S.weekSched||{};
+DAY_KEYS.forEach(k=>{if(!Array.isArray(S.weekSched[k]))S.weekSched[k]=cloneSched(S.sched)});
+let scheduleEditorDay=dayKeyForDate(new Date());
+function ensureWeekSchedules(){
+  S.weekSched=S.weekSched||{};
+  DAY_KEYS.forEach(k=>{if(!Array.isArray(S.weekSched[k]))S.weekSched[k]=cloneSched(S.sched||mkSched())});
+}
+function loadEditorDay(k){
+  ensureWeekSchedules();
+  scheduleEditorDay=DAY_KEYS.includes(k)?k:dayKeyForDate(new Date());
+  S.sched=cloneSched(S.weekSched[scheduleEditorDay]||mkSched());
+}
+function activateTodaySchedule(){
+  ensureWeekSchedules();
+  const k=dayKeyForDate(new Date());
+  S.sched=cloneSched(S.weekSched[k]||S.sched||mkSched());
+}
+function saveEditorDay(){
+  S.weekSched[scheduleEditorDay]=cloneSched(S.sched);
+  if(scheduleEditorDay===dayKeyForDate(new Date()))saveCurrentDateSchedule();
 }
 // Start each new calendar date with the latest saved timetable.
 // Later edits on that date will not rewrite earlier date snapshots.
@@ -147,7 +176,12 @@ const el=()=>S.run?Math.max(0,(S.run.pt||Date.now())-S.run.t0-S.run.pm):0;
 // nav
 const TABS=[['today','Today'],['week','Weekly tracker'],['sched','Schedule'],['review','Review & history'],['set','Alarms & backup']];
 $('#nav').innerHTML=TABS.map(t=>`<button data-t="${t[0]}" onclick="go('${t[0]}')">${t[1]}</button>`).join('');
-function go(t){tab=t;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.id==='t-'+t));document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));render()}
+function go(t){
+  if(tab==='sched'&&t!=='sched'){readRows();saveEditorDay();activateTodaySchedule();save()}
+  if(t==='sched'&&tab!=='sched')loadEditorDay(dayKeyForDate(new Date()));
+  tab=t;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.id==='t-'+t));
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));render()
+}
 function render(){({today:renderToday,week:renderWeek,sched:renderSched,review:renderReview,set:renderSet})[tab]()}
 function toggleTheme(){S.cfg.theme=S.cfg.theme==='light'?'dark':'light';document.documentElement.dataset.theme=S.cfg.theme;save()}
 // today
@@ -202,14 +236,38 @@ const tickC=(id,i,v)=>{L(id).checks[i].d=v;save()},delC=(id,i)=>{L(id).checks.sp
 const addN=id=>{const x=$('#ni').value.trim();if(x){L(id).notes.push({t:Date.now(),x});save();detail(id)}};
 const openM=h=>{$('#mb').innerHTML=h;$('#modal').style.display='flex'},closeM=()=>$('#modal').style.display='none';
 // schedule editor
-function renderSched(){freezeExistingScheduleDays();$('#sedit').innerHTML='<tr><th>On</th><th>Activity</th><th>Start</th><th>End</th><th>Category</th><th></th></tr>'+S.sched.slice().sort((a,b)=>M(a.s)-M(b.s)).map(a=>`<tr data-id="${a.id}"><td><input type="checkbox" class="o" ${a.on?'checked':''}></td><td><input class="n" value="${esc(a.name)}" style="width:100%;min-width:180px"></td><td><input class="s" type="time" value="${a.s}"></td><td><input class="e" type="time" value="${a.e}"></td><td><select class="c">${['Personal','Job','Learning','Practice','Portfolio','Interview','Rest'].map(c=>`<option ${c===a.cat?'selected':''}>${c}</option>`).join('')}</select></td><td class="row"><button onclick="dupAct('${a.id}')">Copy</button><button class="bad" onclick="delAct('${a.id}')">Delete</button></td></tr>`).join('')}
+function renderSched(){
+  freezeExistingScheduleDays();
+  if(!Array.isArray(S.sched))S.sched=mkSched();
+  const picker=$('#scheduleDay');
+  if(picker)picker.value=scheduleEditorDay;
+  const safe=S.sched.filter(a=>a&&typeof a==='object'&&typeof a.s==='string'&&typeof a.e==='string');
+  if(safe.length!==S.sched.length)S.sched=safe;
+  $('#sedit').innerHTML='<tr><th>On</th><th>Activity</th><th>Start</th><th>End</th><th>Category</th><th>Actions</th></tr>'+
+    S.sched.slice().sort((a,b)=>M(a.s||'00:00')-M(b.s||'00:00')).map(a=>
+    `<tr data-id="${esc(a.id)}"><td><input type="checkbox" class="o" ${a.on!==false?'checked':''}></td>
+    <td><input class="n" value="${esc(a.name||'')}" style="width:100%;min-width:180px"></td>
+    <td><input class="s" type="time" value="${esc(a.s||'09:00')}"></td>
+    <td><input class="e" type="time" value="${esc(a.e||'09:30')}"></td>
+    <td><select class="c">${['Personal','Job','Learning','Practice','Portfolio','Interview','Rest'].map(c=>`<option ${c===(a.cat||'Personal')?'selected':''}>${c}</option>`).join('')}</select></td>
+    <td class="row"><button onclick="dupAct('${esc(a.id)}')">Copy</button><button class="bad" onclick="delAct('${esc(a.id)}')">Delete</button></td></tr>`).join('');
+}
+function changeScheduleDay(k){
+  readRows();saveEditorDay();loadEditorDay(k);save();renderSched();
+}
 function readRows(){document.querySelectorAll('#sedit tr[data-id]').forEach(r=>{const a=byId(r.dataset.id);if(!a)return;a.on=r.querySelector('.o').checked;a.name=r.querySelector('.n').value||a.name;a.s=r.querySelector('.s').value||a.s;a.e=r.querySelector('.e').value||a.e;a.cat=r.querySelector('.c').value})}
-function saveSched(){readRows();const A=acts(),w=[];A.forEach((a,i)=>{if(M(a.e)<M(a.s))w.push(a.name+': ends before it starts');const b=A[i+1];if(b&&M(b.s)<M(a.e))w.push(`"${a.name}" overlaps "${b.name}"`)});
- if(w.length&&!confirm('Warnings:\n'+w.join('\n')+'\n\nSave anyway?'))return;saveCurrentDateSchedule();save();renderSched();alert('Schedule saved for '+dkey()+'. Previous dates keep their own timetable.')}
-const addAct=()=>{readRows();S.sched.push({id:'c'+Date.now(),name:'New activity',s:'12:00',e:'12:30',cat:'Personal',alarm:true,on:true,pf:25,pb:5});saveCurrentDateSchedule();save();renderSched()};
-const dupAct=id=>{readRows();const a=byId(id);S.sched.push({...a,id:'c'+Date.now(),name:a.name+' (copy)'});saveCurrentDateSchedule();save();renderSched()};
-const delAct=id=>{if(confirm('Delete this activity from today’s schedule? Past logs stay in their original dates.')){readRows();S.sched=S.sched.filter(a=>a.id!==id);saveCurrentDateSchedule();save();renderSched()}};
-const restoreSched=()=>{if(confirm('Restore the original 26-activity timetable for today only? Previous dates and their logs will be kept.')){S.sched=mkSched();saveCurrentDateSchedule();save();renderSched()}};
+function saveSched(){
+  readRows();
+  const A=acts(),w=[];
+  A.forEach((a,i)=>{if(M(a.e)<M(a.s))w.push(a.name+': ends before it starts');const b=A[i+1];if(b&&M(b.s)<M(a.e))w.push(`"${a.name}" overlaps "${b.name}"`)});
+  if(w.length&&!confirm('Warnings:\\n'+w.join('\\n')+'\\n\\nSave anyway?'))return;
+  saveEditorDay();save();renderSched();
+  alert(DAY_NAMES[DAY_KEYS.indexOf(scheduleEditorDay)]+' schedule saved. Other weekdays are unchanged.');
+}
+const addAct=()=>{readRows();S.sched.push({id:'c'+Date.now(),name:'New activity',s:'12:00',e:'12:30',cat:'Personal',alarm:true,on:true,pf:25,pb:5});saveEditorDay();save();renderSched()};
+const dupAct=id=>{readRows();const a=byId(id);if(!a)return;S.sched.push({...a,id:'c'+Date.now(),name:a.name+' (copy)'});saveEditorDay();save();renderSched()};
+const delAct=id=>{if(confirm('Delete this activity from '+DAY_NAMES[DAY_KEYS.indexOf(scheduleEditorDay)]+' only?')){readRows();S.sched=S.sched.filter(a=>a.id!==id);saveEditorDay();save();renderSched()}};
+const restoreSched=()=>{if(confirm('Restore the original timetable for '+DAY_NAMES[DAY_KEYS.indexOf(scheduleEditorDay)]+' only? Other weekdays and previous logs will be kept.')){S.sched=mkSched();saveEditorDay();save();renderSched()}};
 // review
 function renderReview(){$('#vd').value=vdate;const daySched=scheduleForDate(vdate),lg=S.logs[vdate]||{},d=S.day[vdate]||{};let c={completed:0,partial:0,failed:0,skipped:0},prod=0,learn=0,intr=0,pom=0,jobs=0,gh=0,prac=0;
  const rows=daySched.slice().sort((a,b)=>M(a.s)-M(b.s)).filter(a=>lg[a.id]);
@@ -383,6 +441,7 @@ function wExp(k){const r=wrep(),b='Yogi-Tracker-'+r.wk,n=k==='p'?b+'.pdf':k==='d
  if(k==='p')dl(n,mkPdf(pdfLines(r)),'application/pdf');else if(k==='d')dl(n,whtml(r,'w'),'application/msword');else dl(n,whtml(r,'x'),'application/vnd.ms-excel');
  const x=$('#wxs');if(x){x.textContent='✔ Downloaded '+n;setTimeout(()=>x.textContent='',4000)}}
 showQ(qi);
+activateTodaySchedule();
 loadCus();go('today');setInterval(()=>{tick();if(tab==='today'&&S.run&&new Date().getSeconds()===0)renderToday()},1000);
   
 </script>
